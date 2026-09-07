@@ -78,7 +78,7 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/runpod-image-worker:sha-${{ steps.gate.outputs.short_sha }}
+            ghcr.io/brunotrakinasdev/runpod-image-worker:sha-${{ steps.gate.outputs.short_sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
