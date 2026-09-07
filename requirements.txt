@@ -1,10 +1,5 @@
 runpod==1.7.13
-diffusers==0.31.0
-transformers==4.46.3
-accelerate==1.1.1
-safetensors==0.4.5
-invisible-watermark==0.2.0
+requests==2.32.3
 Pillow==11.0.0
-xformers==0.0.28.post1
-sentencepiece==0.2.0
-protobuf==5.28.3
+boto3==1.35.78
+PyYAML==6.0.2

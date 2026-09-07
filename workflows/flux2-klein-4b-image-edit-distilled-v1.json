@@ -1,0 +1,260 @@
+{
+  "schema_version": "privacy-comfyui-workflow-v1",
+  "workflow_version": 1,
+  "engine": "flux-2-klein",
+  "bindings": {
+    "flux_model_name": {
+      "node_id": "70",
+      "input": "unet_name"
+    },
+    "flux2_text_encoder_name": {
+      "node_id": "71",
+      "input": "clip_name"
+    },
+    "flux2_vae_name": {
+      "node_id": "72",
+      "input": "vae_name"
+    },
+    "positive_prompt": {
+      "node_id": "74",
+      "input": "text"
+    },
+    "reference_image": {
+      "node_id": "200",
+      "input": "image"
+    },
+    "seed": {
+      "node_id": "73",
+      "input": "noise_seed"
+    },
+    "steps": {
+      "node_id": "62",
+      "input": "steps"
+    },
+    "cfg": {
+      "node_id": "63",
+      "input": "cfg"
+    },
+    "filename_prefix": {
+      "node_id": "201",
+      "input": "filename_prefix"
+    }
+  },
+  "output_nodes": [
+    "201"
+  ],
+  "prompt": {
+    "61": {
+      "class_type": "KSamplerSelect",
+      "inputs": {
+        "sampler_name": "euler"
+      }
+    },
+    "70": {
+      "class_type": "UNETLoader",
+      "inputs": {
+        "unet_name": "flux-2-klein-4b-fp8.safetensors",
+        "weight_dtype": "default"
+      }
+    },
+    "71": {
+      "class_type": "CLIPLoader",
+      "inputs": {
+        "clip_name": "qwen_3_4b.safetensors",
+        "type": "flux2",
+        "device": "default"
+      }
+    },
+    "72": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "flux2-vae.safetensors"
+      }
+    },
+    "66": {
+      "class_type": "EmptyFlux2LatentImage",
+      "inputs": {
+        "width": [
+          "99",
+          0
+        ],
+        "height": [
+          "99",
+          1
+        ],
+        "batch_size": 1
+      }
+    },
+    "80": {
+      "class_type": "ImageScaleToTotalPixels",
+      "inputs": {
+        "upscale_method": "nearest-exact",
+        "megapixels": 1,
+        "resolution_steps": 1,
+        "image": [
+          "200",
+          0
+        ]
+      }
+    },
+    "62": {
+      "class_type": "Flux2Scheduler",
+      "inputs": {
+        "width": [
+          "99",
+          0
+        ],
+        "height": [
+          "99",
+          1
+        ],
+        "steps": 4
+      }
+    },
+    "74": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "clip": [
+          "71",
+          0
+        ],
+        "text": "Change the bag color to blue."
+      }
+    },
+    "82": {
+      "class_type": "ConditioningZeroOut",
+      "inputs": {
+        "conditioning": [
+          "74",
+          0
+        ]
+      }
+    },
+    "121": {
+      "class_type": "ReferenceLatent",
+      "inputs": {
+        "latent": [
+          "122",
+          0
+        ],
+        "conditioning": [
+          "82",
+          0
+        ]
+      }
+    },
+    "99": {
+      "class_type": "GetImageSize",
+      "inputs": {
+        "image": [
+          "80",
+          0
+        ]
+      }
+    },
+    "123": {
+      "class_type": "ReferenceLatent",
+      "inputs": {
+        "latent": [
+          "122",
+          0
+        ],
+        "conditioning": [
+          "74",
+          0
+        ]
+      }
+    },
+    "122": {
+      "class_type": "VAEEncode",
+      "inputs": {
+        "pixels": [
+          "80",
+          0
+        ],
+        "vae": [
+          "72",
+          0
+        ]
+      }
+    },
+    "64": {
+      "class_type": "SamplerCustomAdvanced",
+      "inputs": {
+        "noise": [
+          "73",
+          0
+        ],
+        "guider": [
+          "63",
+          0
+        ],
+        "sampler": [
+          "61",
+          0
+        ],
+        "sigmas": [
+          "62",
+          0
+        ],
+        "latent_image": [
+          "66",
+          0
+        ]
+      }
+    },
+    "65": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": [
+          "64",
+          0
+        ],
+        "vae": [
+          "72",
+          0
+        ]
+      }
+    },
+    "73": {
+      "class_type": "RandomNoise",
+      "inputs": {
+        "noise_seed": 43301611940728
+      }
+    },
+    "63": {
+      "class_type": "CFGGuider",
+      "inputs": {
+        "model": [
+          "70",
+          0
+        ],
+        "positive": [
+          "123",
+          0
+        ],
+        "negative": [
+          "121",
+          0
+        ],
+        "cfg": 1.0
+      }
+    },
+    "200": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "__REFERENCE_IMAGE__"
+      }
+    },
+    "201": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "privacy/flux2-klein",
+        "images": [
+          "65",
+          0
+        ]
+      }
+    }
+  }
+}

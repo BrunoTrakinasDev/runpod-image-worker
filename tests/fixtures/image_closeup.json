@@ -1,0 +1,62 @@
+{
+  "id": "runpod-test-image-closeup",
+  "input": {
+    "contract_version": "privacy-production-spec-v1",
+    "engine": "flux-1-schnell",
+    "task": "image.generate",
+    "request_id": "req-image-001",
+    "prompt": {
+      "positive": "adult close-up portrait on the beach, high detail, consistent identity",
+      "negative": "low quality, duplicate person, bad anatomy"
+    },
+    "comfyui": {
+      "adapter": "comfyui-graph-contract-v1",
+      "workflow_id": "flux-image-v1",
+      "workflow_version": "1",
+      "graph": null,
+      "input_bindings": {}
+    },
+    "safety": {
+      "licensed_or_consented_assets_only": true,
+      "require_approved_identity_references": true,
+      "private_output_only": true,
+      "public_url_forbidden": true,
+      "qa_required": true
+    },
+    "identity": {
+      "source": "approved_mapping_vault",
+      "strict": true,
+      "references": [
+        {
+          "asset_id": "00000000-0000-4000-8000-000000000101",
+          "system_tag": "face_front",
+          "media_type": "image",
+          "content_type": "image/png",
+          "signed_url": "https://media.example.test/private/kyc-front.png"
+        },
+        {
+          "asset_id": "00000000-0000-4000-8000-000000000102",
+          "system_tag": "nsfw_closeup_front",
+          "media_type": "image",
+          "content_type": "image/png",
+          "signed_url": "https://media.example.test/private/kyc-close.png"
+        }
+      ]
+    },
+    "camera": {
+      "shot": "close-up"
+    },
+    "sampling": {
+      "steps": 10,
+      "guidance_scale": 1.5,
+      "seed": 42
+    },
+    "output": {
+      "format": "png",
+      "width": 1025,
+      "height": 1367,
+      "private_storage": true,
+      "initial_status": "qa_pending"
+    }
+  }
+}

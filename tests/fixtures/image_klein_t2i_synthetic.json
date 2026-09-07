@@ -1,0 +1,59 @@
+{
+  "input": {
+    "contract_version": "privacy-production-spec-v1",
+    "engine": "flux-2-klein",
+    "task": "image.generate",
+    "request_id": "req-klein-t2i-001",
+    "prompt": {
+      "positive": "adult synthetic portrait, studio lighting, realistic photography",
+      "negative": "minor, child, low quality, watermark"
+    },
+    "comfyui": {
+      "adapter": "comfyui-graph-contract-v1",
+      "workflow_id": "flux-ai-avatar-base-v1",
+      "workflow_version": "1",
+      "graph": null
+    },
+    "safety": {
+      "licensed_or_consented_assets_only": true,
+      "require_approved_identity_references": false,
+      "require_validated_synthetic_identity_definition": true,
+      "private_output_only": true,
+      "public_url_forbidden": true,
+      "qa_required": true
+    },
+    "identity": {
+      "mode": "synthetic_prompt_definition",
+      "source": "synthetic_prompt_definition",
+      "ai_avatar_definition_id": "definition-ai-001",
+      "definition_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "vocabulary_version": 1,
+      "appearance_snapshot": {
+        "contractVersion": "mil4-d-ai-appearance-snapshot-v1",
+        "dimensions": [
+          {
+            "dimensionCode": "presentation",
+            "optionCode": "presentation_1"
+          }
+        ]
+      },
+      "strict": true
+    },
+    "output": {
+      "width": 1024,
+      "height": 1024,
+      "private_storage": true,
+      "initial_status": "qa_pending"
+    },
+    "sampling": {
+      "steps": 4,
+      "guidance_scale": 1.0,
+      "seed": 42
+    },
+    "metadata": {
+      "avatar_origin": "ai_avatar",
+      "identity_mode": "synthetic_prompt_definition",
+      "purpose": "canonical_ai_avatar_base_identity_candidate"
+    }
+  }
+}

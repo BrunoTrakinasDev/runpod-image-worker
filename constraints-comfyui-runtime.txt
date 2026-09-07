@@ -1,0 +1,10 @@
+# IA ADULTA — D4D controlled ComfyUI runtime constraints
+# Protect PyTorch/CUDA stack from ComfyUI floating requirements.
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
+
+# Protect package versions already owned by the image worker.
+requests==2.32.3
+Pillow==11.0.0
+PyYAML==6.0.2
