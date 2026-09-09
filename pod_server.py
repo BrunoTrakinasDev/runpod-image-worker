@@ -1,6 +1,7 @@
 import hmac
 import json
 import os
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -95,11 +96,32 @@ def _safe_worker_type(error):
     return value
 
 
+def _safe_comfyui_diagnostic(error):
+    details = getattr(error, "details", None)
+    if not isinstance(details, dict):
+        return {}
+    kind = details.get("diagnosticKind")
+    if not isinstance(kind, str) or kind not in ("INVALID_RESPONSE_TYPE", "WORKFLOW_REJECTED"):
+        return {}
+    result = {"diagnosticKind": kind}
+    response_type = details.get("responseType")
+    if isinstance(response_type, str) and response_type in ("dict", "list", "str", "int", "float", "bool", "NoneType", "unknown"):
+        result["responseType"] = response_type
+    ids = details.get("nodeErrorIds")
+    if isinstance(ids, list):
+        result["nodeErrorIds"] = list(dict.fromkeys(
+            value for value in ids
+            if isinstance(value, str) and re.fullmatch(r"[0-9]{1,10}", value)
+        ))[:20]
+    return result
+
+
 def _safe_worker_failure_payload(error):
     if isinstance(error, WorkerError):
         return {
             "ok": False,
             "error": "GENERATION_FAILED",
+            **_safe_comfyui_diagnostic(error),
             "workerCode": _safe_worker_code(error),
             "workerType": _safe_worker_type(error),
             "phase": _safe_worker_phase(error),

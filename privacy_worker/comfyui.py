@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
+import re
 import subprocess
 import threading
 import time
@@ -105,14 +106,45 @@ class ComfyUIClient:
             response = requests.post(f"{self.settings.comfyui_base_url}/prompt", json=payload, timeout=30)
             response.raise_for_status()
             body = response.json()
+        except requests.HTTPError as error:
+            if getattr(response, "status_code", None) != 400:
+                raise ComfyUIError("Falha ao enviar workflow para o ComfyUI.") from error
+            try:
+                body = response.json()
+            except (requests.RequestException, ValueError):
+                raise ComfyUIError("Falha ao enviar workflow para o ComfyUI.") from None
+            # A 400 must remain a failure even if the body includes a prompt_id.
+            if isinstance(body, dict):
+                body = {"node_errors": body.get("node_errors")}
         except (requests.RequestException, json.JSONDecodeError) as error:
             raise ComfyUIError("Falha ao enviar workflow para o ComfyUI.") from error
+
+        if not isinstance(body, dict):
+            raise ComfyUIError(
+                "ComfyUI retornou resposta inválida ao enfileirar o workflow.",
+                details={
+                    "diagnosticKind": "INVALID_RESPONSE_TYPE",
+                    "responseType": type(body).__name__ if type(body) in (list, str, int, float, bool, type(None)) else "unknown",
+                    "response_type": type(body).__name__ if type(body) in (list, str, int, float, bool, type(None)) else "unknown",
+                },
+            )
+
         prompt_id = body.get("prompt_id")
         if not prompt_id:
-            raise ComfyUIError("ComfyUI rejeitou o workflow.", details={"error": body.get("error"), "node_errors": body.get("node_errors")})
+            raise ComfyUIError(
+                "ComfyUI rejeitou o workflow.",
+                details={
+                    "diagnosticKind": "WORKFLOW_REJECTED",
+                    "responseType": "dict",
+                    "nodeErrorIds": [
+                        key for key in (body.get("node_errors") or {})
+                        if isinstance(key, str) and re.fullmatch(r"[0-9]{1,10}", key)
+                    ][:20] if isinstance(body.get("node_errors"), dict) else [],
+                },
+            )
+
         log_event("comfyui_prompt_queued", request_id=request_id, prompt_id=prompt_id)
         return str(prompt_id)
-
     def wait_for_history(self, prompt_id: str, request_id: str) -> dict[str, Any]:
         started = now_ms()
         deadline = time.monotonic() + self.settings.comfyui_job_timeout_seconds
