@@ -16,6 +16,12 @@ permissions:
   contents: read
   packages: write
 
+# Shared by all refs and reruns of this publication workflow.
+concurrency:
+  group: ghcr-runpod-image-worker-publication
+  cancel-in-progress: false
+  queue: max
+
 jobs:
   publish:
     name: Controlled immutable publication
@@ -67,6 +73,108 @@ jobs:
 
       - name: Configure Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Reject existing or unverified GHCR tag
+        timeout-minutes: 5
+        shell: python
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          import base64
+          import json
+          import os
+          import re
+          import urllib.parse
+          import urllib.request
+
+          REPOSITORY = "brunotrakinasdev/runpod-image-worker"
+          PATH = "/v2/" + REPOSITORY + "/tags/list"
+          BASE = "https://ghcr.io" + PATH
+          PAGE_SIZE = 100
+
+          def require(condition):
+              if not condition:
+                  raise ValueError("Registry response cannot prove tag absence")
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  raise ValueError("Registry redirect rejected")
+
+          def unique_object(pairs):
+              result = {}
+              for key, value in pairs:
+                  require(key not in result)
+                  result[key] = value
+              return result
+
+          def get_json(opener, url, authorization):
+              request = urllib.request.Request(url, headers={
+                  "Authorization": authorization, "Accept": "application/json",
+                  "Accept-Encoding": "identity", "Cache-Control": "no-cache",
+              })
+              with opener.open(request, timeout=30) as response:
+                  require(response.status == 200 and response.geturl() == url)
+                  require(response.headers.get_content_type() == "application/json")
+                  require(response.headers.get("Content-Encoding", "identity") == "identity")
+                  require(len(response.headers.get_all("Link", [])) <= 1)
+                  require(len(response.headers.get_all("Content-Length", [])) <= 1)
+                  body = response.read(1048577)
+                  require(len(body) <= 1048576)
+                  length = response.headers.get("Content-Length")
+                  if length is not None:
+                      require(length.isascii() and length.isdecimal() and int(length) == len(body))
+                  data = json.loads(body.decode("utf-8"), object_pairs_hook=unique_object)
+                  require(type(data) is dict)
+                  return data, response.headers.get("Link")
+
+          def preflight(opener, actor, credential, sha):
+              require(bool(actor) and bool(credential) and re.fullmatch(r"[0-9a-f]{40}", sha))
+              candidate = "sha-" + sha[:12]
+              basic = base64.b64encode((actor + ":" + credential).encode()).decode()
+              token_url = "https://ghcr.io/token?" + urllib.parse.urlencode({
+                  "service": "ghcr.io", "scope": "repository:" + REPOSITORY + ":pull",
+              })
+              data, link = get_json(opener, token_url, "Basic " + basic)
+              token = data.get("token", data.get("access_token"))
+              require(link is None and isinstance(token, str) and bool(token))
+              require(re.fullmatch(r"[A-Za-z0-9._~+/=-]+", token))
+              require("access_token" not in data or data["access_token"] == token)
+              url, last = BASE + "?n=100", ""
+              for _ in range(1000):
+                  data, link = get_json(opener, url, "Bearer " + token)
+                  require(data.get("name") == REPOSITORY and "tags" in data and "errors" not in data)
+                  tags = data["tags"]
+                  require(type(tags) is list and len(tags) <= PAGE_SIZE)
+                  require(all(isinstance(t, str) and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", t) for t in tags))
+                  require(tags == sorted(set(tags)) and all(t > last for t in tags))
+                  if candidate in tags:
+                      raise ValueError("Candidate tag already exists; publication blocked")
+                  if link is not None:
+                      match = re.fullmatch(r'\s*<([^<>]+)>;\s*rel="next"\s*', link)
+                      require(match is not None and bool(tags))
+                      next_url = urllib.parse.urljoin(url, match[1])
+                      parsed = urllib.parse.urlsplit(next_url)
+                      require(parsed.scheme == "https" and parsed.netloc == "ghcr.io")
+                      require(parsed.path == PATH and not parsed.fragment)
+                      query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
+                      require(query == {"n": ["100"], "last": [tags[-1]]})
+                      url = next_url
+                  elif len(tags) == PAGE_SIZE:
+                      # A full page without Link is not proof of completion.
+                      url = BASE + "?" + urllib.parse.urlencode({"n": 100, "last": tags[-1]})
+                  else:
+                      return candidate
+                  last = tags[-1]
+              raise ValueError("Pagination limit reached; publication blocked")
+
+          if __name__ == "__main__":
+              try:
+                  preflight(urllib.request.build_opener(NoRedirect()), os.environ["GITHUB_ACTOR"],
+                            os.environ["GHCR_TOKEN"], os.environ["GITHUB_SHA"])
+              except Exception:
+                  # Never emit credentials, response bodies, or exception URLs.
+                  raise SystemExit("GHCR_PREFLIGHT=BLOCKED (existing tag or unproven absence)") from None
+              print("GHCR_PREFLIGHT=PASS")
 
       - name: Build and publish immutable candidate
         id: build
