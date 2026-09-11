@@ -60,6 +60,8 @@ class ComfyUIProcessManager:
                     "--port",
                     str(self.settings.comfyui_port),
                     "--disable-auto-launch",
+                    "--models-directory",
+                    str(self.settings.model_root),
                     "--input-directory",
                     str(self.settings.input_dir),
                     "--output-directory",
