@@ -28,9 +28,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout exact selected ref
-        uses: actions/checkout@v4
-
       - name: Validate publication authorization
         id: gate
         shell: bash
@@ -45,10 +42,8 @@ jobs:
             exit 1
           fi
 
-          if [ "$CONTROL_COMMIT" != "$GITHUB_SHA" ]; then
-            echo "control_commit does not match GITHUB_SHA."
-            echo "Expected: $GITHUB_SHA"
-            echo "Received: $CONTROL_COMMIT"
+          if [[ ! "$CONTROL_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "control_commit must be an exact lowercase 40-character commit SHA."
             exit 1
           fi
 
@@ -57,12 +52,30 @@ jobs:
             exit 1
           fi
 
-          SHORT_SHA="${GITHUB_SHA:0:12}"
+          SHORT_SHA="${CONTROL_COMMIT:0:12}"
+          echo "control_commit=$CONTROL_COMMIT" >> "$GITHUB_OUTPUT"
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
 
           echo "PUBLICATION_GATE=PASS"
-          echo "CONTROL_COMMIT=$GITHUB_SHA"
+          echo "CONTROL_COMMIT=$CONTROL_COMMIT"
           echo "IMAGE_TAG=sha-$SHORT_SHA"
+
+      - name: Checkout exact controlled commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.gate.outputs.control_commit }}
+
+      - name: Verify controlled checkout
+        shell: bash
+        env:
+          CONTROL_COMMIT: ${{ steps.gate.outputs.control_commit }}
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "$CONTROL_COMMIT" ]; then
+            echo "CONTROLLED_CHECKOUT=BLOCKED"
+            exit 1
+          fi
+          echo "CONTROLLED_CHECKOUT=PASS"
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -79,18 +92,24 @@ jobs:
         shell: python
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CONTROL_COMMIT: ${{ steps.gate.outputs.control_commit }}
         run: |
           import base64
           import json
           import os
           import re
+          import urllib.error
           import urllib.parse
           import urllib.request
 
           REPOSITORY = "brunotrakinasdev/runpod-image-worker"
-          PATH = "/v2/" + REPOSITORY + "/tags/list"
-          BASE = "https://ghcr.io" + PATH
-          PAGE_SIZE = 100
+          MANIFEST_ACCEPT = ", ".join((
+              "application/vnd.oci.image.index.v1+json",
+              "application/vnd.oci.image.manifest.v1+json",
+              "application/vnd.docker.distribution.manifest.list.v2+json",
+              "application/vnd.docker.distribution.manifest.v2+json",
+          ))
+          MAX_METADATA_BYTES = 1048576
 
           def require(condition):
               if not condition:
@@ -107,74 +126,94 @@ jobs:
                   result[key] = value
               return result
 
-          def get_json(opener, url, authorization):
+          def reject_constant(value):
+              raise ValueError("Invalid JSON constant")
+
+          def read_json(response, url):
+              require(response.geturl() == url)
+              require(response.headers.get_content_type() == "application/json")
+              require(response.headers.get("Content-Encoding", "identity") == "identity")
+              require(len(response.headers.get_all("Content-Type", [])) == 1)
+              require(len(response.headers.get_all("Content-Encoding", [])) <= 1)
+              require(len(response.headers.get_all("Content-Length", [])) <= 1)
+              body = response.read(MAX_METADATA_BYTES + 1)
+              require(len(body) <= MAX_METADATA_BYTES)
+              length = response.headers.get("Content-Length")
+              if length is not None:
+                  require(length.isascii() and length.isdecimal() and int(length) == len(body))
+              data = json.loads(body.decode("utf-8"), object_pairs_hook=unique_object, parse_constant=reject_constant)
+              require(type(data) is dict)
+              return data
+
+          def get_token(opener, actor, credential):
+              basic = base64.b64encode((actor + ":" + credential).encode()).decode()
+              url = "https://ghcr.io/token?" + urllib.parse.urlencode({
+                  "service": "ghcr.io", "scope": "repository:" + REPOSITORY + ":pull",
+              })
               request = urllib.request.Request(url, headers={
-                  "Authorization": authorization, "Accept": "application/json",
+                  "Authorization": "Basic " + basic, "Accept": "application/json",
                   "Accept-Encoding": "identity", "Cache-Control": "no-cache",
               })
               with opener.open(request, timeout=30) as response:
-                  require(response.status == 200 and response.geturl() == url)
-                  require(response.headers.get_content_type() == "application/json")
-                  require(response.headers.get("Content-Encoding", "identity") == "identity")
-                  require(len(response.headers.get_all("Link", [])) <= 1)
-                  require(len(response.headers.get_all("Content-Length", [])) <= 1)
-                  body = response.read(1048577)
-                  require(len(body) <= 1048576)
-                  length = response.headers.get("Content-Length")
-                  if length is not None:
-                      require(length.isascii() and length.isdecimal() and int(length) == len(body))
-                  data = json.loads(body.decode("utf-8"), object_pairs_hook=unique_object)
-                  require(type(data) is dict)
-                  return data, response.headers.get("Link")
-
-          def preflight(opener, actor, credential, sha):
-              require(bool(actor) and bool(credential) and re.fullmatch(r"[0-9a-f]{40}", sha))
-              candidate = "sha-" + sha[:12]
-              basic = base64.b64encode((actor + ":" + credential).encode()).decode()
-              token_url = "https://ghcr.io/token?" + urllib.parse.urlencode({
-                  "service": "ghcr.io", "scope": "repository:" + REPOSITORY + ":pull",
-              })
-              data, link = get_json(opener, token_url, "Basic " + basic)
+                  require(response.status == 200)
+                  data = read_json(response, url)
+                  require(response.headers.get("Link") is None)
               token = data.get("token", data.get("access_token"))
-              require(link is None and isinstance(token, str) and bool(token))
+              require(isinstance(token, str) and bool(token))
               require(re.fullmatch(r"[A-Za-z0-9._~+/=-]+", token))
               require("access_token" not in data or data["access_token"] == token)
-              url, last = BASE + "?n=100", ""
-              for _ in range(1000):
-                  data, link = get_json(opener, url, "Bearer " + token)
-                  require(data.get("name") == REPOSITORY and "tags" in data and "errors" not in data)
-                  tags = data["tags"]
-                  require(type(tags) is list and len(tags) <= PAGE_SIZE)
-                  require(all(isinstance(t, str) and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", t) for t in tags))
-                  require(tags == sorted(set(tags)) and all(t > last for t in tags))
-                  if candidate in tags:
-                      raise ValueError("Candidate tag already exists; publication blocked")
-                  if link is not None:
-                      match = re.fullmatch(r'\s*<([^<>]+)>;\s*rel="next"\s*', link)
-                      require(match is not None and bool(tags))
-                      next_url = urllib.parse.urljoin(url, match[1])
-                      parsed = urllib.parse.urlsplit(next_url)
-                      require(parsed.scheme == "https" and parsed.netloc == "ghcr.io")
-                      require(parsed.path == PATH and not parsed.fragment)
-                      query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
-                      require(query == {"n": ["100"], "last": [tags[-1]]})
-                      url = next_url
-                  elif len(tags) == PAGE_SIZE:
-                      # A full page without Link is not proof of completion.
-                      url = BASE + "?" + urllib.parse.urlencode({"n": 100, "last": tags[-1]})
-                  else:
-                      return candidate
-                  last = tags[-1]
-              raise ValueError("Pagination limit reached; publication blocked")
+              return token
+
+          def probe_exact_manifest(opener, candidate, token):
+              url = "https://ghcr.io/v2/" + REPOSITORY + "/manifests/" + candidate
+              request = urllib.request.Request(url, headers={
+                  "Authorization": "Bearer " + token, "Accept": MANIFEST_ACCEPT,
+                  "Accept-Encoding": "identity", "Cache-Control": "no-cache",
+              })
+              try:
+                  response = opener.open(request, timeout=30)
+              except urllib.error.HTTPError as error:
+                  response = error
+              with response:
+                  # Any 200 blocks immediately, regardless of body or content type.
+                  if response.status == 200:
+                      return "BLOCK_EXISTING_TAG"
+                  require(response.status == 404)
+                  data = read_json(response, url)
+              require(set(data) == {"errors"})
+              errors = data["errors"]
+              require(type(errors) is list and bool(errors))
+              require(all(
+                  type(error) is dict
+                  and set(error) <= {"code", "message", "detail"}
+                  and error.get("code") == "MANIFEST_UNKNOWN"
+                  and isinstance(error.get("message"), str)
+                  and bool(error["message"].strip())
+                  for error in errors
+              ))
+              return "ALLOW_ABSENCE_PROVEN"
+
+          def preflight(opener, actor, credential, control_commit):
+              try:
+                  require(bool(actor) and bool(credential))
+                  require(isinstance(control_commit, str) and re.fullmatch(r"[0-9a-f]{40}", control_commit))
+                  candidate = "sha-" + control_commit[:12]
+                  token = get_token(opener, actor, credential)
+                  return probe_exact_manifest(opener, candidate, token)
+              except Exception:
+                  # Never emit credentials, response bodies, exception details or URLs.
+                  return "BLOCK_UNPROVEN"
 
           if __name__ == "__main__":
-              try:
-                  preflight(urllib.request.build_opener(NoRedirect()), os.environ["GITHUB_ACTOR"],
-                            os.environ["GHCR_TOKEN"], os.environ["GITHUB_SHA"])
-              except Exception:
-                  # Never emit credentials, response bodies, or exception URLs.
-                  raise SystemExit("GHCR_PREFLIGHT=BLOCKED (existing tag or unproven absence)") from None
-              print("GHCR_PREFLIGHT=PASS")
+              result = preflight(
+                  urllib.request.build_opener(NoRedirect()),
+                  os.environ.get("GITHUB_ACTOR", ""),
+                  os.environ.get("GHCR_TOKEN", ""),
+                  os.environ.get("CONTROL_COMMIT", ""),
+              )
+              if result != "ALLOW_ABSENCE_PROVEN":
+                  raise SystemExit("GHCR_PREFLIGHT=" + result)
+              print("GHCR_PREFLIGHT=PASS (exact tag absence proven)")
 
       - name: Build and publish immutable candidate
         id: build
@@ -189,16 +228,18 @@ jobs:
             ghcr.io/brunotrakinasdev/runpod-image-worker:sha-${{ steps.gate.outputs.short_sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.gate.outputs.control_commit }}
 
       - name: Record immutable digest
         shell: bash
+        env:
+          CONTROL_COMMIT: ${{ steps.gate.outputs.control_commit }}
         run: |
           set -euo pipefail
 
           echo "## R3C.9K immutable image publication" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Commit: \`$GITHUB_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: \`$CONTROL_COMMIT\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Tag: \`sha-${{ steps.gate.outputs.short_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Digest: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
 
