@@ -88,7 +88,10 @@ def _override_envelope(local: dict[str, Any], graph_override: dict[str, Any] | N
 
 def prepare_workflow(*, request: ProductionRequest, reference_image_filename: str | None, output_prefix: str, settings: Settings) -> PreparedWorkflow:
     workflow_name = WORKFLOW_ALIASES.get(request.workflow_id, request.workflow_id)
-    synthetic_t2i = request.identity_mode == SYNTHETIC_PROMPT_IDENTITY_MODE
+    prompt_only = request.identity_mode == "synthetic_t2i"
+    if prompt_only and (request.references or request.reference_image_url or reference_image_filename is not None or request.graph_override is not None):
+        raise WorkflowError("SYNTHETIC_T2I_IDENTITY_OR_GRAPH_REJECTED")
+    synthetic_t2i = request.identity_mode in (SYNTHETIC_PROMPT_IDENTITY_MODE, "synthetic_t2i")
     if synthetic_t2i and workflow_name != SYNTHETIC_KLEIN_WORKFLOW_ID:
         raise WorkflowError("Avatar IA sint?tico exige workflow Klein T2I dedicado.")
     if not synthetic_t2i and workflow_name == SYNTHETIC_KLEIN_WORKFLOW_ID:

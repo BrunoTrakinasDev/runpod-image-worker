@@ -179,8 +179,66 @@ def _pick_reference(refs: tuple[IdentityReference, ...], closeup_context: bool) 
     return ordered[0]
 
 
+
+SYNTHETIC_T2I_MODE = "synthetic_t2i"
+
+
+def _validate_synthetic_t2i(spec: dict[str, Any]) -> None:
+    # Closed schema only for the new mode: never drop identity-bearing fields.
+    schemas = {
+        "": {"contract_version", "request_id", "task", "engine", "generationMode", "prompt", "sampling", "output", "safety", "comfyui"},
+        "prompt": {"positive", "negative"},
+        "sampling": {"steps", "guidance_scale", "seed"},
+        "output": {"width", "height", "format", "private_storage"},
+        "safety": {"licensed_or_consented_assets_only", "private_output_only", "public_url_forbidden", "qa_required"},
+        "comfyui": {"workflow_id", "workflow_version"},
+    }
+    for section, allowed in schemas.items():
+        value = spec if not section else spec.get(section)
+        if not isinstance(value, dict) or set(value) - allowed:
+            raise ContractError("SYNTHETIC_T2I_FIELDS_REJECTED")
+    if spec.get("engine") != "flux-2-klein" or spec.get("generationMode") != SYNTHETIC_T2I_MODE:
+        raise ContractError("SYNTHETIC_T2I_MODE_REJECTED")
+    if not isinstance(spec.get("request_id"), str) or not spec["request_id"].strip():
+        raise ContractError("SYNTHETIC_T2I_REQUEST_ID_REQUIRED")
+    prompt = spec["prompt"]
+    if not isinstance(prompt.get("positive"), str) or not prompt["positive"].strip():
+        raise ContractError("SYNTHETIC_T2I_PROMPT_REQUIRED")
+    if "negative" in prompt and not isinstance(prompt["negative"], str):
+        raise ContractError("SYNTHETIC_T2I_PROMPT_REJECTED")
+    output = spec["output"]
+    if output.get("private_storage") is not True or output.get("format") != "png":
+        raise ContractError("SYNTHETIC_T2I_PRIVATE_PNG_REQUIRED")
+    for dimension in ("width", "height"):
+        value = output.get(dimension)
+        if type(value) is not int or not 256 <= value <= 4096 or value % 16:
+            raise ContractError("SYNTHETIC_T2I_SIZE_REJECTED")
+    sampling = spec["sampling"]
+    if type(sampling.get("steps")) is not int or not 1 <= sampling["steps"] <= 150:
+        raise ContractError("SYNTHETIC_T2I_STEPS_REJECTED")
+    if type(sampling.get("guidance_scale")) not in (int, float) or not 0 <= sampling["guidance_scale"] <= 30:
+        raise ContractError("SYNTHETIC_T2I_GUIDANCE_REJECTED")
+    if type(sampling.get("seed")) is not int or not 0 <= sampling["seed"] <= 9007199254740991:
+        raise ContractError("SYNTHETIC_T2I_SEED_REJECTED")
+    if spec["comfyui"] != {"workflow_id": SYNTHETIC_KLEIN_WORKFLOW_ID, "workflow_version": "1"}:
+        raise ContractError("SYNTHETIC_T2I_WORKFLOW_REJECTED")
+
+
 def parse_production_request(event: dict[str, Any]) -> ProductionRequest:
     spec = _unwrap_payload(event)
+
+    mode = spec.get("generationMode")
+    if "generationMode" in spec and mode not in (SYNTHETIC_T2I_MODE, "identity_preserving"):
+        raise ContractError("GENERATION_MODE_REJECTED")
+    prompt_only = mode == SYNTHETIC_T2I_MODE
+    if prompt_only:
+        envelope = event
+        while envelope is not spec:
+            wrapper = next((key for key in ("input", "production_spec", "productionSpec") if isinstance(envelope.get(key), dict)), None)
+            if wrapper is None or set(envelope) != {wrapper}:
+                raise ContractError("SYNTHETIC_T2I_ENVELOPE_REJECTED")
+            envelope = envelope[wrapper]
+        _validate_synthetic_t2i(spec)
 
     contract_version = _text(spec.get("contract_version"))
     if contract_version != CONTRACT_VERSION:
@@ -237,7 +295,7 @@ def parse_production_request(event: dict[str, Any]) -> ProductionRequest:
 
     identity = spec.get("identity") or {}
 
-    if identity.get("strict") is not True:
+    if not prompt_only and identity.get("strict") is not True:
         raise ContractError(
             "O worker de imagem exige identity.strict=true."
         )
@@ -250,6 +308,11 @@ def parse_production_request(event: dict[str, Any]) -> ProductionRequest:
     synthetic_identity = (
         identity_mode == SYNTHETIC_PROMPT_IDENTITY_MODE
     )
+
+    if mode == "identity_preserving" and identity_mode != APPROVED_ACTOR_IDENTITY_MODE:
+        raise ContractError("IDENTITY_PRESERVING_MODE_CONFLICT")
+    if prompt_only:
+        identity_mode = SYNTHETIC_T2I_MODE
 
     references = _collect_references(spec)
     selected = None
@@ -318,7 +381,7 @@ def parse_production_request(event: dict[str, Any]) -> ProductionRequest:
                 "Avatar IA sint?tico exige appearance_snapshot validado."
             )
 
-    else:
+    elif not prompt_only:
         if safety.get("require_approved_identity_references") is not True:
             raise ContractError(
                 "Produ??o com identidade humana exige "
@@ -353,7 +416,7 @@ def parse_production_request(event: dict[str, Any]) -> ProductionRequest:
         comfyui.get("workflow_id")
     )
 
-    if synthetic_identity:
+    if synthetic_identity or prompt_only:
         workflow_id = (
             requested_workflow_id
             or SYNTHETIC_KLEIN_WORKFLOW_ALIAS
