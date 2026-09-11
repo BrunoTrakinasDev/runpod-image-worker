@@ -43,4 +43,4 @@ COPY . /app
 RUN mkdir -p /runpod-volume/privacy-flux-runtime /runpod-volume/models /runpod-volume/huggingface \
     && python scripts/validate_workflows.py
 
-CMD ["python", "-u", "/app/handler.py"]
+CMD ["python", "-u", "/app/pod_server.py"]
