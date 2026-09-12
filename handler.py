@@ -8,7 +8,8 @@ from privacy_worker.comfyui import ComfyUIClient, ComfyUIProcessManager
 from privacy_worker.config import settings
 from privacy_worker.contracts import parse_production_request
 from privacy_worker.downloader import download_media
-from privacy_worker.errors import WorkerError
+from privacy_worker.errors import WorkerError, ModelRegistryPreparationError
+from privacy_worker.model_registry import prepare_model_storage
 from privacy_worker.output import publish_output
 from privacy_worker.telemetry import log_event, now_ms
 from privacy_worker.workflows import prepare_workflow
@@ -79,6 +80,16 @@ def handler(event: dict) -> dict:
         )
 
         phase = "model_validation"
+        # Keep legacy local-volume engines independent of registry manifests.
+        # Native HTTP already serializes this work under the generation lock.
+        if settings.model_source_mode != "local_volume":
+            try:
+                prepare_model_storage(engine=request.engine, settings=settings)
+            except Exception:
+                # SDK exceptions may contain credentials, URLs or local paths.
+                raise ModelRegistryPreparationError(
+                    "Model registry preparation failed."
+                ) from None
         _validate_models(request.engine)
 
         reference_path = None

@@ -27,3 +27,7 @@ class ComfyUIError(WorkerError):
 
 class OutputError(WorkerError):
     code = "OUTPUT_ERROR"
+
+
+class ModelRegistryPreparationError(WorkerError):
+    code = "MODEL_REGISTRY_PREPARATION_FAILED"
