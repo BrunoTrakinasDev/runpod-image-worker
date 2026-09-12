@@ -116,11 +116,41 @@ def _safe_comfyui_diagnostic(error):
     return result
 
 
+def _safe_comfyui_start_reason_payload(error):
+    """
+    Return a bounded startup reason only during comfyui_start.
+
+    Outside comfyui_start return an empty mapping so every legacy
+    WorkerError payload keeps its previous provider-facing fields.
+    """
+    if not isinstance(error, WorkerError):
+        return {}
+
+    if _safe_worker_phase(error) != "comfyui_start":
+        return {}
+
+    message = str(error or "").strip()
+
+    if "COMFYUI_START_LOCAL=false" in message:
+        reason = "COMFYUI_START_LOCAL_DISABLED"
+    elif "ComfyUI" in message and "encontrado em" in message:
+        reason = "COMFYUI_ROOT_MISSING"
+    elif "ComfyUI" in message and "encerrou durante" in message:
+        reason = "COMFYUI_PROCESS_EXITED"
+    elif message.startswith("Timeout ") and "ComfyUI" in message:
+        reason = "COMFYUI_START_TIMEOUT"
+    else:
+        reason = "COMFYUI_START_OTHER"
+
+    return {"message": reason}
+
+
 def _safe_worker_failure_payload(error):
     if isinstance(error, WorkerError):
         return {
             "ok": False,
             "error": "GENERATION_FAILED",
+            **_safe_comfyui_start_reason_payload(error),
             **_safe_comfyui_diagnostic(error),
             "workerCode": _safe_worker_code(error),
             "workerType": _safe_worker_type(error),
